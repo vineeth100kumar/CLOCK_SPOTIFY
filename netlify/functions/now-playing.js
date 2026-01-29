@@ -1,15 +1,15 @@
-const querystring = require("querystring");
+exports.handler = async () => {
+  const refreshToken = process.env.SPOTIFY_REFRESH_TOKEN;
 
-exports.handler = async (event) => {
-  const code = event.queryStringParameters.code;
+  if (!refreshToken) {
+    return {
+      statusCode: 401,
+      body: JSON.stringify({ error: "Missing refresh token" }),
+    };
+  }
 
-  const body = querystring.stringify({
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: process.env.SPOTIFY_REDIRECT_URI,
-  });
-
-  const response = await fetch("https://accounts.spotify.com/api/token", {
+  // 1. Get access token using refresh token
+  const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: {
       Authorization:
@@ -21,17 +21,50 @@ exports.handler = async (event) => {
         ).toString("base64"),
       "Content-Type": "application/x-www-form-urlencoded",
     },
-    body,
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
   });
 
-  const data = await response.json();
+  const tokenData = await tokenRes.json();
 
-  // 🔥 PRINT REFRESH TOKEN TO LOGS (IMPORTANT)
-  console.log("REFRESH_TOKEN:", data.refresh_token);
+  if (!tokenData.access_token) {
+    return {
+      statusCode: 401,
+      body: JSON.stringify({ error: "Failed to refresh access token" }),
+    };
+  }
+
+  // 2. Get currently playing track
+  const playbackRes = await fetch(
+    "https://api.spotify.com/v1/me/player/currently-playing",
+    {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+      },
+    }
+  );
+
+  // Nothing playing
+  if (playbackRes.status === 204) {
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ playing: false }),
+    };
+  }
+
+  const playback = await playbackRes.json();
 
   return {
     statusCode: 200,
-    body:
-      "Spotify connected. Copy refresh token from Netlify logs and save it as an environment variable.",
+    body: JSON.stringify({
+      playing: true,
+      track: playback.item.name,
+      artist: playback.item.artists.map((a) => a.name).join(", "),
+      album: playback.item.album.name,
+      progress_ms: playback.progress_ms,
+      duration_ms: playback.item.duration_ms,
+    }),
   };
 };
